@@ -1,0 +1,67 @@
+# Define the high-level pipeline stages and their execution order
+stages:
+  - build
+  - deploy
+
+# Build infrastructure and the docker images using Pulumi
+build:
+  stage: build
+  image: pulumi/pulumi-python:3.220.0
+  services: # define extra helper containers available during this job (i.e., Docker)
+    - docker:28.5.1-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "" # disable TLS → simpler for local DinD
+    DOCKER_HOST: "tcp://docker:2375"
+  cache: # stores files between pipelines to speed up future job runs
+    key: # defines when a cache can be reused or needs to be regenerated
+      files: [environments/requirements.txt] # refresh cache when requirements file changes
+    paths: # lists the folders that will actually be cached
+      - /root/.cache/pip/ # cache installed packages
+    policy: pull-push # pull existing cache before job; update it after completion
+  before_script:
+    - cd environments
+    - mkdir -p .cache/pip
+    - echo "$GOOGLE_CREDENTIALS_B64" | base64 -d > ./credentials/service-account-key.json
+    - export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/credentials/service-account-key.json"
+    - pip install -r requirements.txt
+  script:
+    - cd build
+    - pulumi stack select "$CI_COMMIT_BRANCH" || pulumi stack init "$CI_COMMIT_BRANCH" --non-interactive # temporary safeguard! remove 'stack init' once all env stacks are created
+    - pulumi up --yes
+    - echo "OLLAMA_IMAGE_NAME=$(pulumi stack output ollama_image_name)" > build.env
+    - echo "OLLAMA_IMAGE_DIGEST=$(pulumi stack output ollama_repo_digest)" >> build.env
+    - echo "AGENT_IMAGE_NAME=$(pulumi stack output agent_image_name)" >> build.env
+    - echo "AGENT_IMAGE_DIGEST=$(pulumi stack output agent_repo_digest)" >> build.env
+  artifacts: # define files to be passed between jobs (e.g. env vars, binaries, reports)
+    reports: # mark artifacts that GitLab can parse or reuse in a special way
+      dotenv: environments/build/build.env # tells GitLab to load env vars from this file into downstream jobs
+
+# Deploy the previously built artifacts/infrastructure
+deploy:
+  stage: deploy
+  image: pulumi/pulumi-python:3.220.0
+  needs: # declares dependencies so this job can use artifacts from others and run earlier
+    - job: build # allows this job to start as soon as 'build' finishes and access its artifacts
+  cache:
+    key:
+      files: [environments/requirements.txt]
+    paths:
+      - /root/.cache/pip/
+    policy: pull-push
+  before_script:
+    - cd environments
+    - mkdir -p .cache/pip
+    - echo "$GOOGLE_CREDENTIALS_B64" | base64 -d > ./credentials/service-account-key.json
+    - export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/credentials/service-account-key.json"
+    - pip install -r requirements.txt
+  script:
+    - cd deploy
+    - pulumi stack select "$CI_COMMIT_BRANCH" || pulumi stack init "$CI_COMMIT_BRANCH" --non-interactive # temporary safeguard! remove 'stack init' once all env stacks are created
+    - pulumi up --yes
+    - echo "GCP_PROJECT=$(pulumi stack output project)" > deploy.env
+    - echo "GCP_REGION=$(pulumi stack output region)" >> deploy.env
+    - echo "OLLAMA_BACKEND_URL=$(pulumi stack output ollama_backend_url)" >> deploy.env
+    - echo "AGENT_URL=$(pulumi stack output agent_url)" >> deploy.env
+  artifacts:
+    reports:
+      dotenv: environments/deploy/deploy.env
