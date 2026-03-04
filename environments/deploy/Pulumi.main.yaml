@@ -1,4 +1,4 @@
 config:
-  gcp:project: adk-agent-732619
+  gcp:project: adk-agent-329873
   gcp:region: europe-west1
   env: production
