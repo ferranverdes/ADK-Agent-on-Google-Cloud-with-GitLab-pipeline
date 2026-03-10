@@ -118,6 +118,7 @@ In your GitLab project:
    * **Value:** the Base64-encoded JSON  
    * **Environment:** "All (default)" or scoped to the branch you use  
    * **Visibility:** ✅ Masked  
+   * **Flags:** 🚫 **Unset the "Protect variable"** checkbox for demonstration purposes.   
 
 These variables allow GitLab jobs to authenticate against GCP and Pulumi.
 
